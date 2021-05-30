@@ -1,0 +1,62 @@
+#Debug for non runbook
+#Import required modules
+#Import required modules
+#install-module az.resources -force
+#import-module az.resources -force
+#install-module az.monitor -force
+#import-module az.monitor -force
+#User with cross Azure AD tenant access
+#needs changing
+$clientID =""
+$key = ""
+$SecurePassword = $key | ConvertTo-SecureString -AsPlainText -Force
+$cred = new-object -typename System.Management.Automation.PSCredential -argumentlist $clientID, $SecurePassword
+#Connect to the AZ account
+connect-azAccount -Credential $cred -Tenant "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxx"
+
+
+#The 2 tags to add to resources if they dont already have themmj
+#Tag variables
+$tag1 = 'Created-By'
+$tag2 = 'Creation-Date'
+
+#Arrays for resources missing the 2 tags above respectively.
+$aliasedRs = @()
+
+#Sort logic to find resources missing the tags above adding $tag1 - Created-by to resources without it but pulling the Created-By value from the caller entry in the log (get-azLog)
+$rs = get-azresource | select tags, resourceid
+foreach ($line in $rs){$keys = $line.tags.keys; if($keys -notcontains $tag1 -or $keys -notcontains $tag2 ){$aliasedrs += $line.resourceid}}
+#foreach ($line in $rs){$keys = $line.tags.keys; if($keys -notcontains $tag2){$aliasedrs1 += $line.resourceid}}
+
+
+
+#Loop though resources in $alisedRs
+foreach ($r in $aliasedRs)
+{
+
+    #Looks back 7 days (default) for the oldest entry of caller using Get-AZLog
+    $callers = Get-AZLog -ResourceID $r -starttime (get-date).addDays(-80) -EndTime (Get-Date) | Select Caller, resourceid, Eventtimestamp | Where-Object { $_.Caller -and ($_.Caller -ne "System")} | sort-object Eventtimestamp -desc | select -last 1
+    #$eventtimestamp = Get-AZLog -ResourceID $r -EndTime (Get-Date) | Select Eventtimestamp, resourceid | Where-Object { $_.eventtimestamp} | select -last 1
+
+    #if $caller isn't null
+    if ($callers){
+       $alias = $callers[0].Caller
+       write-host $alias 
+       write-host $callers.resourceid
+       $timestamp = $callers.eventtimestamp[0]
+       $timestamp=$timestamp.tostring("MM-dd-yyyy")
+				
+       #Write-Warning "Tagging Resource Group $rg for alias $alias"
+       if (-not $WhatIf)
+        {
+       #write-host "$tag1" + " $alias"
+       #tag the resource
+       Set-AZResource -force -ResourceID $r -Tag @{ $tag1 = $alias;$tag2 = $timestamp}
+       #write-host "$tag2" + " $timestamp"
+       write-host " $r"
+       #Exclude untagable resources from email.  Might need to add more in here!
+       if ($r -eq "ResourceID"){} else {
+        send-mailmessage -to "x@x.co.uk" -from x@x.co.uk -subject "New Resources in Azure have been created" -body "New Resource ID $r has been created" -smtpserver smtpserver}
+        }
+       }
+     }
